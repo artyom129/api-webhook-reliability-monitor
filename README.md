@@ -2,7 +2,7 @@
 
 A production-style FastAPI dashboard for receiving, inspecting, validating, forwarding, replaying, retrying, and exporting webhook events.
 
-![Dashboard](docs/screenshots/dashboard.png)
+![Dashboard](docs/screenshots/dashboard-live-v2.png)
 
 ## Why this project exists
 

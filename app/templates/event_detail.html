@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Event #{{ event.id }} · {{ app_name }}{% endblock %}
+{% block heading %}Webhook event #{{ event.id }}{% endblock %}
+{% block content %}
+<section class="event-summary panel">
+  <div class="event-heading"><span class="method-badge">{{ event.method }}</span><div><h2>{{ event.endpoint.name }}</h2><code>/hooks/{{ event.endpoint.slug }}</code></div></div>
+  <div class="event-actions">
+    {% if event.endpoint.target_url %}<form action="/events/{{ event.id }}/replay" method="post"><button class="button">Replay now</button></form>{% endif %}
+    {% if event.endpoint.target_url %}<form action="/events/{{ event.id }}/retry-now" method="post"><button class="button secondary">Queue retry</button></form>{% endif %}
+  </div>
+</section>
+<section class="stats-grid compact">
+  <article class="stat-card"><span>Validation</span><strong class="small-strong">{{ event.validation_status }}</strong></article>
+  <article class="stat-card"><span>Delivery</span><strong class="small-strong">{{ event.forwarding_status }}</strong></article>
+  <article class="stat-card"><span>HTTP status</span><strong>{{ event.response_status or '—' }}</strong></article>
+  <article class="stat-card"><span>Attempts</span><strong>{{ event.attempt_count }}</strong></article>
+</section>
+<section class="detail-grid">
+  <article class="panel code-panel"><div class="panel-header"><h3>Payload</h3><button class="button small secondary" data-copy="#payload">Copy</button></div><pre id="payload"><code>{{ body_pretty }}</code></pre></article>
+  <article class="panel code-panel"><div class="panel-header"><h3>Headers</h3><button class="button small secondary" data-copy="#headers">Copy</button></div><pre id="headers"><code>{{ headers_pretty }}</code></pre></article>
+  <article class="panel code-panel"><div class="panel-header"><h3>Query parameters</h3></div><pre><code>{{ query_pretty }}</code></pre></article>
+  <article class="panel code-panel"><div class="panel-header"><h3>Last target response</h3></div><pre><code>{{ event.response_body or event.last_error or 'No forwarding attempt yet.' }}</code></pre></article>
+</section>
+<section class="panel">
+  <div class="panel-header"><div><p class="eyebrow">Delivery history</p><h2>Attempts</h2></div></div>
+  {% if event.attempts %}
+  <div class="table-wrap"><table><thead><tr><th>Time</th><th>Target</th><th>Status</th><th>Duration</th><th>Result</th></tr></thead><tbody>
+  {% for attempt in event.attempts %}<tr><td>{{ attempt.created_at.strftime('%b %d, %H:%M:%S') }}</td><td class="truncate">{{ attempt.target_url }}</td><td>{{ attempt.status_code or '—' }}</td><td>{{ attempt.duration_ms or '—' }} ms</td><td><span class="pill {% if attempt.succeeded %}success{% else %}danger{% endif %}">{{ 'Delivered' if attempt.succeeded else (attempt.error or 'Failed') }}</span></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty-state"><strong>No delivery attempts</strong><p>Configure a target URL and replay this event.</p></div>{% endif %}
+</section>
+{% endblock %}

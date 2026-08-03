@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}API Tester · {{ app_name }}{% endblock %}
+{% block heading %}API request tester{% endblock %}
+{% block content %}
+<section class="tester-grid">
+  <form method="post" action="/api-tester" class="panel tester-form">
+    <div class="panel-header"><div><p class="eyebrow">Manual request</p><h2>Send API call</h2></div></div>
+    <div class="request-line"><select name="method"><option>GET</option><option selected>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select><input type="url" name="url" required placeholder="https://httpbin.org/anything"></div>
+    <label>Headers JSON<textarea name="headers_json" rows="6">{"Content-Type":"application/json"}</textarea></label>
+    <label>Request body<textarea name="body" rows="10" placeholder='{"hello":"world"}'></textarea></label>
+    <button class="button" type="submit">Send request</button>
+  </form>
+  <article class="panel response-panel">
+    <div class="panel-header"><div><p class="eyebrow">Latest response</p><h2>Result</h2></div>{% if result %}<span class="pill {% if result.response_status and result.response_status < 400 %}success{% else %}danger{% endif %}">{{ result.response_status or 'Error' }}</span>{% endif %}</div>
+    {% if result %}<div class="response-meta"><span>{{ result.method }} {{ result.url }}</span><span>{{ result.duration_ms }} ms</span></div><pre><code>{{ result.response_body or result.error }}</code></pre>
+    {% else %}<div class="empty-state"><strong>No request sent yet</strong><p>Use this panel to reproduce API failures and inspect raw responses.</p></div>{% endif %}
+  </article>
+</section>
+<section class="panel">
+  <div class="panel-header"><div><p class="eyebrow">Request history</p><h2>Recent API calls</h2></div></div>
+  {% if logs %}<div class="table-wrap"><table><thead><tr><th>Method</th><th>URL</th><th>Status</th><th>Duration</th><th>Time</th></tr></thead><tbody>
+  {% for log in logs %}<tr><td><span class="method-badge small">{{ log.method }}</span></td><td class="truncate">{{ log.url }}</td><td>{{ log.response_status or 'Error' }}</td><td>{{ log.duration_ms }} ms</td><td>{{ log.created_at.strftime('%b %d, %H:%M:%S') }}</td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty-state"><strong>No API history</strong></div>{% endif %}
+</section>
+{% endblock %}

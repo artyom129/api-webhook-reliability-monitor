@@ -1,0 +1,14 @@
+services:
+  monitor:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////app/data/monitor.db
+      RETRY_POLL_SECONDS: 5
+      REQUEST_TIMEOUT_SECONDS: 15
+    volumes:
+      - monitor-data:/app/data
+
+volumes:
+  monitor-data:

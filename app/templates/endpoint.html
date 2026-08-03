@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ endpoint.name }} · {{ app_name }}{% endblock %}
+{% block heading %}{{ endpoint.name }}{% endblock %}
+{% block content %}
+<section class="endpoint-hero panel">
+  <div>
+    <p class="eyebrow">Receiver URL</p>
+    <div class="copy-line"><code id="hook-url">{{ request.base_url }}hooks/{{ endpoint.slug }}</code><button class="button small secondary" data-copy="#hook-url">Copy</button></div>
+    <p class="muted-text">Forward target: {{ endpoint.target_url or 'Not configured' }}</p>
+  </div>
+  <div class="endpoint-actions">
+    <span class="pill {% if endpoint.is_active %}success{% else %}muted{% endif %}">{{ 'Active' if endpoint.is_active else 'Paused' }}</span>
+    <form action="/endpoints/{{ endpoint.id }}/toggle" method="post"><button class="button secondary">{{ 'Pause' if endpoint.is_active else 'Resume' }}</button></form>
+    <form action="/endpoints/{{ endpoint.id }}/rotate-secret" method="post"><button class="button secondary">Rotate secret</button></form>
+  </div>
+</section>
+<section class="settings-grid">
+  <article class="panel"><p class="eyebrow">Forwarding</p><h3>{{ 'Enabled' if endpoint.auto_forward else 'Manual replay' }}</h3><p>{{ endpoint.target_url or 'Set a target URL when creating a new endpoint.' }}</p></article>
+  <article class="panel"><p class="eyebrow">Retry policy</p><h3>{{ endpoint.max_retries }} attempts</h3><p>Initial delay {{ endpoint.retry_delay_seconds }} seconds, then exponential backoff.</p></article>
+  <article class="panel"><p class="eyebrow">Authentication</p><h3>{{ 'Secret required' if endpoint.signing_secret else 'Open receiver' }}</h3><p>{% if endpoint.signing_secret %}Send the value in <code>X-Webhook-Secret</code>.{% else %}No shared secret is configured.{% endif %}</p></article>
+</section>
+<section class="panel">
+  <div class="panel-header"><div><p class="eyebrow">Event history</p><h2>Captured requests</h2></div><span class="pill">{{ events|length }} shown</span></div>
+  {% if events %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>ID</th><th>Method</th><th>Validation</th><th>Delivery</th><th>Status</th><th>Attempts</th><th>Received</th></tr></thead>
+    <tbody>{% for event in events %}<tr>
+      <td><a href="/events/{{ event.id }}">#{{ event.id }}</a></td><td>{{ event.method }}</td>
+      <td><span class="pill {% if event.validation_status == 'valid' %}success{% else %}danger{% endif %}">{{ event.validation_status }}</span></td>
+      <td><span class="pill status-{{ event.forwarding_status }}">{{ event.forwarding_status }}</span></td>
+      <td>{{ event.response_status or '—' }}</td><td>{{ event.attempt_count }}</td><td>{{ event.received_at.strftime('%b %d, %H:%M:%S') }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="empty-state"><strong>No events captured yet</strong><p>Send a request to the receiver URL above.</p></div>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">AR</div>
+        <div><strong>API Reliability</strong><span>Webhook Control Center</span></div>
+      </div>
+      <nav>
+        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
+        <a href="/api-tester" class="{% if request.url.path.startswith('/api-tester') %}active{% endif %}">API Tester</a>
+        <a href="/docs" target="_blank">Swagger Docs ↗</a>
+        <a href="/exports/events.csv">Export CSV</a>
+        <a href="/exports/events.xlsx">Export Excel</a>
+      </nav>
+      <div class="sidebar-footer"><span class="status-dot"></span> Retry worker active</div>
+    </aside>
+    <main class="main-content">
+      <header class="topbar">
+        <div><p class="eyebrow">Operations dashboard</p><h1>{% block heading %}{{ app_name }}{% endblock %}</h1></div>
+        <div class="topbar-actions">
+          <a class="button secondary" href="/health" target="_blank">Health</a>
+          <button class="button" data-open-modal="endpoint-modal">+ New endpoint</button>
+        </div>
+      </header>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <dialog id="endpoint-modal" class="modal">
+    <form action="/endpoints" method="post" class="modal-card">
+      <div class="modal-header">
+        <div><p class="eyebrow">Webhook receiver</p><h2>Create endpoint</h2></div>
+        <button type="button" class="icon-button" data-close-modal="endpoint-modal">×</button>
+      </div>
+      <div class="form-grid two">
+        <label>Name<input name="name" required placeholder="Stripe production"></label>
+        <label>Slug<input name="slug" placeholder="stripe-production"></label>
+      </div>
+      <label>Forward target URL<input type="url" name="target_url" placeholder="https://api.example.com/webhooks"></label>
+      <label>Webhook secret<input name="signing_secret" placeholder="Optional X-Webhook-Secret value"></label>
+      <div class="form-grid three">
+        <label>Max retries<input type="number" name="max_retries" value="3" min="0" max="10"></label>
+        <label>Retry delay (sec)<input type="number" name="retry_delay_seconds" value="30" min="5"></label>
+        <label class="checkbox"><input type="checkbox" name="auto_forward"> Auto-forward events</label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="button secondary" data-close-modal="endpoint-modal">Cancel</button>
+        <button class="button" type="submit">Create endpoint</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="{{ url_for('static', path='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,7 +1,5 @@
 # API & Webhook Reliability Monitor
 
-[![Tests](https://github.com/artyom129/api-webhook-reliability-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/artyom129/api-webhook-reliability-monitor/actions/workflows/tests.yml)
-
 A production-style FastAPI dashboard for receiving, inspecting, validating, forwarding, replaying, retrying, and exporting webhook events.
 
 ![Dashboard](docs/screenshots/dashboard-live-v2.png)

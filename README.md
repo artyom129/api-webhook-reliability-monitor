@@ -1,3 +1,5 @@
+**English** | [Русский](README_RU.md)
+
 # API & Webhook Reliability Monitor
 
 A production-style FastAPI dashboard for receiving, inspecting, validating, forwarding, replaying, retrying, and exporting webhook events.

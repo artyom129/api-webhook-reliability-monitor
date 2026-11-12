@@ -12,12 +12,14 @@ from typing import Annotated
 
 import pandas as pd
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
+from openpyxl.styles import Font, PatternFill
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import desc, select, text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import BASE_DIR, Settings
 from .database import Base, build_engine, build_session_factory
@@ -26,12 +28,19 @@ from .services import (
     dashboard_stats,
     execute_api_request,
     forward_event,
+    hourly_activity,
     json_dumps,
     parse_json_text,
+    redact_headers,
     retry_worker,
+    search_events,
 )
 
 
+EXPORT_COLUMNS = [
+    "event_id", "endpoint", "method", "validation_status", "forwarding_status",
+    "response_status", "attempt_count", "last_error", "received_at", "body",
+]
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -55,12 +64,29 @@ def clean_slug(value: str) -> str:
 
 
 def template_context(request: Request, **kwargs):
+    worker = getattr(request.app.state, "retry_worker", None)
     return {
         "request": request,
         "app_name": request.app.state.settings.app_name,
         "now": datetime.now(timezone.utc),
+        "worker_running": worker is not None and not worker.done(),
         **kwargs,
     }
+
+
+def spreadsheet_safe(value):
+    """Stop text that starts like a formula from running when opened in Excel.
+
+    Webhook bodies come from outside, so a body like ``=HYPERLINK(...)`` would
+    otherwise become a live formula in the exported file.
+    """
+    if isinstance(value, str) and value[:1] in {"=", "+", "-", "@", "\t", "\r"}:
+        return "'" + value
+    return value
+
+
+def is_http_url(value: str) -> bool:
+    return value.lower().startswith(("http://", "https://"))
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -94,14 +120,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.SessionLocal = SessionLocal
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException):
+        """Browsers get a readable page, API clients and webhook senders get JSON."""
+        wants_html = "text/html" in request.headers.get("accept", "")
+        machine_path = request.url.path.startswith(("/hooks/", "/api/", "/health"))
+        if wants_html and not machine_path:
+            return templates.TemplateResponse(
+                request=request,
+                name="error.html",
+                context=template_context(request, status_code=exc.status_code, message=exc.detail),
+                status_code=exc.status_code,
+            )
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
     @app.get("/health", tags=["System"])
-    def health():
-        return {"status": "ok", "service": settings.app_name}
+    def health(request: Request, session: Session = Depends(get_session)):
+        worker = getattr(request.app.state, "retry_worker", None)
+        worker_running = worker is not None and not worker.done()
+        try:
+            session.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return JSONResponse(
+                {"status": "error", "service": settings.app_name, "database": "unreachable", "retry_worker": worker_running},
+                status_code=503,
+            )
+        return {"status": "ok", "service": settings.app_name, "database": "ok", "retry_worker": worker_running}
 
     @app.get("/", response_class=HTMLResponse, tags=["Dashboard"])
     def dashboard(request: Request, session: Session = Depends(get_session)):
         endpoints = session.scalars(select(WebhookEndpoint).order_by(desc(WebhookEndpoint.created_at))).all()
         events = session.scalars(select(WebhookEvent).order_by(desc(WebhookEvent.received_at)).limit(20)).all()
+        activity = hourly_activity(session)
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -110,6 +160,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 endpoints=endpoints,
                 events=events,
                 stats=dashboard_stats(session),
+                activity=activity,
+                activity_max=max([hour["delivered"] + hour["problems"] + hour["other"] for hour in activity] + [1]),
             ),
         )
 
@@ -126,12 +178,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
     ):
         slug = clean_slug(slug or name)
-        if not slug:
+        if not name.strip() or not slug:
             raise HTTPException(400, "A valid endpoint name or slug is required.")
+        target_url = target_url.strip()
+        if target_url and not is_http_url(target_url):
+            raise HTTPException(400, "The target URL must start with http:// or https://.")
         endpoint = WebhookEndpoint(
             name=name.strip(),
             slug=slug,
-            target_url=target_url.strip() or None,
+            target_url=target_url or None,
             signing_secret=signing_secret.strip() or None,
             auto_forward=as_bool(auto_forward),
             max_retries=max(0, min(max_retries, 10)),
@@ -183,7 +238,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if endpoint is None or not endpoint.is_active:
             raise HTTPException(404, "Webhook endpoint not found or disabled.")
 
+        declared_length = request.headers.get("content-length")
+        if declared_length and declared_length.isdigit() and int(declared_length) > settings.max_body_bytes:
+            raise HTTPException(413, f"Payload is larger than {settings.max_body_bytes} bytes.")
         body_bytes = await request.body()
+        if len(body_bytes) > settings.max_body_bytes:
+            raise HTTPException(413, f"Payload is larger than {settings.max_body_bytes} bytes.")
         body_text = body_bytes.decode("utf-8", errors="replace")
         body_json = None
         validation_status = "valid"
@@ -198,22 +258,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not supplied or not secrets.compare_digest(supplied, endpoint.signing_secret):
                 validation_status = "invalid_secret"
 
+        will_forward = bool(endpoint.target_url and endpoint.auto_forward)
+        if not will_forward:
+            forwarding_status = "not_configured"
+        elif validation_status != "valid":
+            forwarding_status = "skipped"  # invalid requests are stored but never forwarded
+        else:
+            forwarding_status = "queued"
+
         event = WebhookEvent(
             endpoint_id=endpoint.id,
             method=request.method,
             content_type=request.headers.get("content-type"),
-            headers_json=json_dumps(dict(request.headers)),
+            # The shared secret is checked above and must not be stored or shown.
+            headers_json=json_dumps(redact_headers(dict(request.headers))),
             query_json=json_dumps(dict(request.query_params)),
             body_text=body_text,
             body_json=body_json,
             validation_status=validation_status,
-            forwarding_status="queued" if endpoint.target_url and endpoint.auto_forward else "not_configured",
+            forwarding_status=forwarding_status,
         )
         session.add(event)
         session.commit()
         session.refresh(event)
 
-        if endpoint.target_url and endpoint.auto_forward and validation_status == "valid":
+        if forwarding_status == "queued":
             async def run_forward(event_id: int):
                 bg_session = request.app.state.SessionLocal()
                 try:
@@ -270,6 +339,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         event = session.get(WebhookEvent, event_id)
         if event is None:
             raise HTTPException(404, "Event not found.")
+        if not event.endpoint.target_url:
+            raise HTTPException(400, "This endpoint does not have a target URL.")
         event.forwarding_status = "retry_scheduled"
         event.next_retry_at = datetime.now(timezone.utc)
         session.commit()
@@ -318,7 +389,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def export_events_csv(session: Session = Depends(get_session)):
         rows = build_event_export_rows(session)
         buffer = io.StringIO()
-        pd.DataFrame(rows).to_csv(buffer, index=False)
+        pd.DataFrame(rows, columns=EXPORT_COLUMNS).to_csv(buffer, index=False)
         return StreamingResponse(
             iter([buffer.getvalue()]),
             media_type="text/csv",
@@ -330,9 +401,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows = build_event_export_rows(session)
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            pd.DataFrame(rows).to_excel(writer, index=False, sheet_name="Webhook Events")
+            pd.DataFrame(rows, columns=EXPORT_COLUMNS).to_excel(writer, index=False, sheet_name="Webhook Events")
             worksheet = writer.sheets["Webhook Events"]
             worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+            for cell in worksheet[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="1F2937")
             for column in worksheet.columns:
                 width = min(max(len(str(cell.value or "")) for cell in column) + 2, 48)
                 worksheet.column_dimensions[column[0].column_letter].width = width
@@ -348,8 +423,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return dashboard_stats(session)
 
     @app.get("/api/events", tags=["JSON API"])
-    def api_events(limit: int = 50, session: Session = Depends(get_session)):
-        events = session.scalars(select(WebhookEvent).order_by(desc(WebhookEvent.received_at)).limit(min(max(limit, 1), 200))).all()
+    def api_events(
+        limit: int = 50,
+        endpoint: str | None = None,
+        validation_status: str | None = None,
+        forwarding_status: str | None = None,
+        q: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        """Recent events, newest first. ``q`` searches the body and the last error."""
+        events = search_events(
+            session,
+            limit=limit,
+            endpoint=endpoint,
+            validation_status=validation_status,
+            forwarding_status=forwarding_status,
+            q=q,
+        )
         return [
             {
                 "id": event.id,
@@ -372,15 +462,15 @@ def build_event_export_rows(session: Session) -> list[dict]:
     return [
         {
             "event_id": event.id,
-            "endpoint": event.endpoint.slug,
+            "endpoint": spreadsheet_safe(event.endpoint.slug),
             "method": event.method,
             "validation_status": event.validation_status,
             "forwarding_status": event.forwarding_status,
             "response_status": event.response_status,
             "attempt_count": event.attempt_count,
-            "last_error": event.last_error,
+            "last_error": spreadsheet_safe(event.last_error),
             "received_at": event.received_at.isoformat(),
-            "body": event.body_text,
+            "body": spreadsheet_safe(event.body_text),
         }
         for event in events
     ]

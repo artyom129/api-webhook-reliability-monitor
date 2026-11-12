@@ -7,7 +7,7 @@ run:
 	uvicorn app.main:app --reload
 
 demo:
-	python seed_demo.py
+	python seed_demo.py --reset
 	uvicorn app.main:app --reload
 
 test:

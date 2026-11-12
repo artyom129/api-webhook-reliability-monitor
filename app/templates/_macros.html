@@ -1,0 +1,8 @@
+{# One way to show a status everywhere: a dot and the word, colored by meaning. #}
+{% macro status(value) -%}
+<span class="status status-{{ value }}">{{ value|replace('_', ' ') }}</span>
+{%- endmacro %}
+
+{% macro validation(value) -%}
+<span class="status {{ 'status-valid' if value == 'valid' else 'status-invalid' }}">{{ value|replace('_', ' ') }}</span>
+{%- endmacro %}
